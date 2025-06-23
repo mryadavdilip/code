@@ -191,7 +191,7 @@ def split_video_fast(input_path, clip_length=90, trim_start="00:00:00", trim_end
 # Example usage
 split_video_fast(
     r"D:/icons/Freddy (2022).mp4",
-    clip_length=90,
+    clip_length=85,
     trim_start="00:01:45",
     trim_end="02:00:00"
 )
