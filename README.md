@@ -1,0 +1,2 @@
+## This project is solely done for purpose of automation for personal videos processing.
+## Add multiple music loop to a video, split the video into smaller parts of fixed duration and add thumbnail to each part.
