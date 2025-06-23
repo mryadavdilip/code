@@ -3,6 +3,10 @@ import os
 import json
 from PIL import Image, ImageDraw, ImageFont
 
+def hms_to_seconds(hms):
+    h, m, s = map(int, hms.split(":"))
+    return h * 3600 + m * 60 + s
+
 FFPROBE_PATH = r"bin/ffprobe.exe"
 FFMPEG_PATH = r"bin/ffmpeg.exe"
 
@@ -58,7 +62,6 @@ def replace_video_audio(video_path, music_path, output_path):
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-
 def create_thumbnail(text, output_path, size=(640, 360)):
     img = Image.new("RGB", size, "black")
     draw = ImageDraw.Draw(img)
@@ -90,12 +93,31 @@ def add_thumbnail_to_video(video_path, thumbnail_path, output_path):
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def split_video_fast(input_path, clip_length=90):
+def split_video_fast(input_path, clip_length=90, trim_start="00:00:00", trim_end=None):
     if not os.path.exists(input_path):
         print("Video file not found.")
         return
 
-    # Get video duration
+    # Save original file name and extension
+    original_file_name, original_ext = os.path.splitext(os.path.basename(input_path))
+
+    # Step 0: Trim the original video
+    trim_start_sec = hms_to_seconds(trim_start)
+    trim_end_sec = hms_to_seconds(trim_end) if trim_end else None
+    trim_duration = trim_end_sec - trim_start_sec if trim_end_sec else None
+
+    trimmed_video_path = f"{original_file_name}_trimmed{original_ext}"
+    trim_cmd = [
+        FFMPEG_PATH, "-ss", trim_start,
+        "-i", input_path
+    ]
+    if trim_duration:
+        trim_cmd += ["-t", str(trim_duration)]
+    trim_cmd += ["-c", "copy", trimmed_video_path, "-y"]
+    subprocess.run(trim_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    input_path = trimmed_video_path
+
+    # Step 1: Get duration of trimmed video
     result = subprocess.run([
         FFPROBE_PATH, '-v', 'error',
         '-show_entries', 'format=duration',
@@ -110,7 +132,7 @@ def split_video_fast(input_path, clip_length=90):
         print("Failed to retrieve video duration. Check ffprobe path or input file.")
         return
 
-    # Step 1: Load music files and generate combined background music
+    # Step 2: Load music files and generate combined background music
     music_folder = r"D:/icons/music/"  # << CHANGE THIS TO YOUR MUSIC DIRECTORY
     music_files = get_music_files_from_directory(music_folder)
     music_dir_name = os.path.basename(os.path.normpath(music_folder)).replace(" ", "_")
@@ -121,23 +143,22 @@ def split_video_fast(input_path, clip_length=90):
         print("No valid music to overlay. Exiting.")
         return
 
-    # Step 2: Replace video audio
-    file_name, ext = os.path.splitext(os.path.basename(input_path))
-    audio_added_video = f"{file_name}_with_music.mp4"
+    # Step 3: Replace video audio
+    audio_added_video = f"{original_file_name}_with_music{original_ext}"
     replace_video_audio(input_path, combined_music, audio_added_video)
     input_path = audio_added_video
 
-    # Step 3: Split and add thumbnails
-    output_dir = f"{file_name} Clips"
+    # Step 4: Split and add thumbnails
+    output_dir = f"{original_file_name} Clips"
     os.makedirs(output_dir, exist_ok=True)
 
     i = 0
     start = 0
     while start < duration:
-        part_name = f"{file_name} Part {i+1}"
-        output_file = os.path.join(output_dir, f"{part_name}{ext}")
+        part_name = f"{original_file_name} Part {i+1}"
+        output_file = os.path.join(output_dir, f"{part_name}{original_ext}")
         thumbnail_path = os.path.join(output_dir, f"{part_name}_thumb.jpg")
-        final_output = os.path.join(output_dir, f"{part_name}_with_thumb{ext}")
+        final_output = os.path.join(output_dir, f"{part_name}_with_thumb{original_ext}")
 
         # Split video
         split_cmd = [
@@ -150,7 +171,7 @@ def split_video_fast(input_path, clip_length=90):
         subprocess.run(split_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         # Create and attach thumbnail
-        create_thumbnail(f"{file_name} Part {i+1}", thumbnail_path)
+        create_thumbnail(part_name, thumbnail_path)
         add_thumbnail_to_video(output_file, thumbnail_path, final_output)
 
         # Optionally remove temp files
@@ -165,6 +186,12 @@ def split_video_fast(input_path, clip_length=90):
     # Cleanup
     os.remove(combined_music)
     os.remove(audio_added_video)
+    os.remove(trimmed_video_path)
 
 # Example usage
-split_video_fast(r"D:/icons/Freddy (2022).mp4", clip_length=90)
+split_video_fast(
+    r"D:/icons/Freddy (2022).mp4",
+    clip_length=90,
+    trim_start="00:01:45",
+    trim_end="02:00:00"
+)
