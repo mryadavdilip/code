@@ -133,7 +133,7 @@ def split_video_fast(input_path, clip_length=90, trim_start="00:00:00", trim_end
         return
 
     # Step 2: Load music files and generate combined background music
-    music_folder = r"D:/icons/music/"  # << CHANGE THIS TO YOUR MUSIC DIRECTORY
+    music_folder = r"D:/instagram/music/"  # << CHANGE THIS TO YOUR MUSIC DIRECTORY
     music_files = get_music_files_from_directory(music_folder)
     music_dir_name = os.path.basename(os.path.normpath(music_folder)).replace(" ", "_")
     combined_music = f"{music_dir_name}_combined.mp3"
@@ -190,7 +190,7 @@ def split_video_fast(input_path, clip_length=90, trim_start="00:00:00", trim_end
 
 # Example usage
 split_video_fast(
-    r"D:/icons/Freddy (2022).mp4",
+    r"D:/icons/K.G.F Chapter 1 (2018).mkv",
     clip_length=85,
     trim_start="00:01:45",
     trim_end="02:00:00"
