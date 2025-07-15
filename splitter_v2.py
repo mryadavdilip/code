@@ -4,13 +4,17 @@ import json
 import argparse
 import tempfile
 from PIL import Image, ImageDraw, ImageFont
+import re
+
 
 def hms_to_seconds(hms):
     h, m, s = map(int, hms.split(":"))
     return h * 3600 + m * 60 + s
 
+
 FFPROBE_PATH = r"bin/ffprobe.exe"
 FFMPEG_PATH = r"bin/ffmpeg.exe"
+
 
 def get_music_files_from_directory(music_dir):
     supported_exts = ('.mp3', '.wav', '.aac', '.m4a')
@@ -19,6 +23,7 @@ def get_music_files_from_directory(music_dir):
         for f in os.listdir(music_dir)
         if f.lower().endswith(supported_exts)
     ]
+
 
 def get_audio_duration(file_path):
     result = subprocess.run([
@@ -32,9 +37,9 @@ def get_audio_duration(file_path):
     except:
         return 0
 
+
 def combine_and_loop_music(music_paths, total_duration, output_audio_path):
     if not music_paths:
-        print("No music files found in the directory.")
         return None
 
     looped_list = []
@@ -60,42 +65,55 @@ def combine_and_loop_music(music_paths, total_duration, output_audio_path):
     os.remove(concat_list_path)
     return output_audio_path
 
-def replace_video_audio(video_path, music_path, output_path):
+
+def replace_video_audio(video_path, music_path, output_path, bg_volume):
     cmd = [
         FFMPEG_PATH,
         '-i', video_path,
         '-i', music_path,
         '-filter_complex',
-        '[1:a]volume=0.05[a1];[0:a][a1]amix=inputs=2:duration=first:dropout_transition=3[a]',
+        f'[1:a]volume={bg_volume}[a1];[0:a][a1]amix=inputs=2:duration=first:dropout_transition=3[a]',
         '-map', '0:v',
         '-map', '[a]',
         '-c:v', 'copy',
         '-shortest',
         output_path, '-y'
     ]
-    result = subprocess.run(cmd, stderr=subprocess.PIPE)
-    if result.returncode != 0:
-        print("Audio replacement failed:", result.stderr.decode())
+    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-def create_thumbnail(text, output_path, size=(640, 360)):
-    img = Image.new("RGB", size, "black")
+
+def parse_style_arg(style_str):
+    result = {}
+    if not style_str:
+        return result
+    tokens = re.findall(r'-([a-z_]+)-\s+([^\-]+)', style_str)
+    for key, value in tokens:
+        result[key] = value.strip()
+    return result
+
+
+def create_thumbnail(text, output_path, size, font_settings):
+    bg_color = font_settings.get("bg_color", "0x000000").replace("0x", "#")
+    text_color = font_settings.get("color", "0xFFFFFF").replace("0x", "#")
+    font_size = int(font_settings.get("size", 40))
+    font_family = font_settings.get("family", "arial.ttf")
+
+    img = Image.new("RGB", size, bg_color)
     draw = ImageDraw.Draw(img)
 
     try:
-        font = ImageFont.truetype("arial.ttf", 40)
+        font = ImageFont.truetype(font_family, font_size)
     except:
-        try:
-            font = ImageFont.truetype("DejaVuSans.ttf", 40)
-        except:
-            font = ImageFont.load_default()
+        font = ImageFont.load_default()
 
     bbox = draw.textbbox((0, 0), text, font=font)
     text_width = bbox[2] - bbox[0]
     text_height = bbox[3] - bbox[1]
 
     position = ((size[0] - text_width) // 2, (size[1] - text_height) // 2)
-    draw.text(position, text, fill="white", font=font)
+    draw.text(position, text, fill=text_color, font=font)
     img.save(output_path)
+
 
 def add_thumbnail_to_video(video_path, thumbnail_path, output_path):
     cmd = [
@@ -111,22 +129,61 @@ def add_thumbnail_to_video(video_path, thumbnail_path, output_path):
     ]
     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-def split_video_fast(input_path, music_folder, clip_length=90, trim_start="00:00:00", trim_end=None):
+
+def build_drawtext_filter(top_text, bottom_text, top_font, bottom_font):
+    filters = []
+    duration = 5
+
+    def text_filter(text, y_pos, font):
+        if not text:
+            return None
+        color = font.get("color", "0xFFFFFFFF").replace("0x", "#")
+        size = font.get("size", "24")
+        family = font.get("family", "arial.ttf")
+        return (
+            f"drawtext=text='{text}':fontfile='{family}':fontsize={size}:fontcolor={color}:"
+            f"x=(w-text_w)/2:y={y_pos}:enable='lt(t\,{duration})'"
+        )
+
+    if top_text:
+        filters.append(text_filter(top_text, 20, top_font))
+    if bottom_text:
+        filters.append(text_filter(bottom_text, "h-text_h-20", bottom_font))
+
+    return ",".join(filter(None, filters))
+
+
+def get_video_resolution(video_path):
+    cmd = [
+        FFPROBE_PATH, '-v', 'error',
+        '-select_streams', 'v:0',
+        '-show_entries', 'stream=width,height',
+        '-of', 'json',
+        video_path
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    info = json.loads(result.stdout)
+    w = info['streams'][0]['width']
+    h = info['streams'][0]['height']
+    return (w, h)
+
+
+def split_video_fast(args):
+    input_path = args.input
     if not os.path.exists(input_path):
         print("Video file not found.")
         return
 
+    os.makedirs(args.output_folder, exist_ok=True)
+
     original_file_name, original_ext = os.path.splitext(os.path.basename(input_path))
 
-    trim_start_sec = hms_to_seconds(trim_start)
-    trim_end_sec = hms_to_seconds(trim_end) if trim_end else None
+    trim_start_sec = hms_to_seconds(args.trim_start)
+    trim_end_sec = hms_to_seconds(args.trim_end) if args.trim_end else None
     trim_duration = trim_end_sec - trim_start_sec if trim_end_sec else None
 
-    trimmed_video_path = f"{original_file_name}_trimmed{original_ext}"
-    trim_cmd = [
-        FFMPEG_PATH, "-ss", trim_start,
-        "-i", input_path
-    ]
+    trimmed_video_path = os.path.join(args.output_folder, f"{original_file_name}_trimmed{original_ext}")
+    trim_cmd = [FFMPEG_PATH, "-ss", args.trim_start, "-i", input_path]
     if trim_duration:
         trim_cmd += ["-t", str(trim_duration)]
     trim_cmd += ["-c", "copy", trimmed_video_path, "-y"]
@@ -141,73 +198,94 @@ def split_video_fast(input_path, music_folder, clip_length=90, trim_start="00:00
     ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
     try:
-        result_json = json.loads(result.stdout)
-        duration = float(result_json['format']['duration'])
-    except (KeyError, ValueError, json.JSONDecodeError):
-        print("Failed to retrieve video duration. Check ffprobe path or input file.")
+        duration = float(json.loads(result.stdout)['format']['duration'])
+    except:
+        print("Failed to retrieve duration.")
         return
 
-    music_files = get_music_files_from_directory(music_folder)
-    music_dir_name = os.path.basename(os.path.normpath(music_folder)).replace(" ", "_")
-    combined_music = f"{music_dir_name}_combined.mp3"
-    combined_music = combine_and_loop_music(music_files, duration, combined_music)
+    music_generated = None
+    if args.music_folder and os.path.exists(args.music_folder):
+        music_files = get_music_files_from_directory(args.music_folder)
+        if music_files:
+            combined_music_path = os.path.join(args.output_folder, f"{args.music_file_name or 'combined_music'}.mp3")
+            music_generated = combine_and_loop_music(music_files, duration, combined_music_path)
 
-    if not combined_music:
-        print("No valid music to overlay. Exiting.")
-        return
+            if music_generated:
+                audio_added_video = os.path.join(args.output_folder, f"{original_file_name}_with_music{original_ext}")
+                replace_video_audio(input_path, music_generated, audio_added_video, args.bg_volume)
+                input_path = audio_added_video
 
-    audio_added_video = f"{original_file_name}_with_music{original_ext}"
-    replace_video_audio(input_path, combined_music, audio_added_video)
-    input_path = audio_added_video
-
-    output_dir = f"{original_file_name} Clips"
-    os.makedirs(output_dir, exist_ok=True)
+    resolution = get_video_resolution(input_path)
+    thumbnail_font = parse_style_arg(args.thumbnail_font)
+    letterbox_settings = parse_style_arg(args.letterbox_setting)
+    letterbox_top_font = parse_style_arg(args.letterbox_top_font)
+    letterbox_bottom_font = parse_style_arg(args.letterbox_bottom_font)
 
     i = 0
     start = 0
+    generated_files = []
+
     while start < duration:
-        part_name = f"{original_file_name} Part {i+1}"
-        output_file = os.path.join(output_dir, f"{part_name}{original_ext}")
-        thumbnail_path = os.path.join(output_dir, f"{part_name}_thumb.jpg")
-        final_output = os.path.join(output_dir, f"{part_name}_with_thumb{original_ext}")
+        part_num = i + 1
+        video_name = args.video_naming_convention.replace("..part", str(part_num))
+        thumbnail_name = args.thumbnail_naming_convention.replace("..part", str(part_num))
+
+        video_file = os.path.join(args.output_folder, f"{video_name}{original_ext}")
+        thumb_path = os.path.join(args.output_folder, f"{thumbnail_name}.jpg")
+        final_output = os.path.join(args.output_folder, f"{video_name}_with_thumb{original_ext}")
+
+        top_text = letterbox_settings.get("top", "").replace("..part", str(part_num)).replace("..input", original_file_name)
+        bottom_text = letterbox_settings.get("bottom", "").replace("..part", str(part_num)).replace("..input", original_file_name)
+        drawtext_filter = build_drawtext_filter(top_text, bottom_text, letterbox_top_font, letterbox_bottom_font)
+
+        vf_filters = [f"transpose={args.video_transpose}"] if args.video_transpose is not None else []
+        if drawtext_filter:
+            vf_filters.append(drawtext_filter)
 
         split_cmd = [
-            FFMPEG_PATH, '-ss', str(start), '-i', input_path,
-            '-t', str(clip_length),
-            '-c', 'copy',
-            '-avoid_negative_ts', 'make_zero',
-            output_file, '-y'
+            FFMPEG_PATH, '-ss', str(start), '-i', input_path, '-t', str(args.clip_length),
+            '-vf', ",".join(vf_filters),
+            '-c:a', 'copy', '-avoid_negative_ts', 'make_zero', video_file, '-y'
         ]
         subprocess.run(split_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-        create_thumbnail(part_name, thumbnail_path)
-        add_thumbnail_to_video(output_file, thumbnail_path, final_output)
+        create_thumbnail(video_name, thumb_path, resolution, thumbnail_font)
+        add_thumbnail_to_video(video_file, thumb_path, final_output)
 
-        os.remove(output_file)
-        # os.remove(thumbnail_path)  # optionally keep
+        generated_files += [video_file, thumb_path, final_output]
 
-        start += clip_length
+        start += args.clip_length
         i += 1
 
-    print(f"Video split into {i} parts with thumbnails in '{output_dir}'")
+    print(f"Video split into {i} parts.")
 
-    os.remove(combined_music)
-    os.remove(audio_added_video)
-    os.remove(trimmed_video_path)
+    if os.path.exists(trimmed_video_path) and args.video_naming_convention:
+        os.remove(trimmed_video_path)
+    if music_generated and not args.music_file_name:
+        os.remove(music_generated)
+    if not args.video_naming_convention:
+        for file in generated_files:
+            if os.path.exists(file):
+                os.remove(file)
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Split video with music and thumbnails")
-    parser.add_argument('video_path', help='Path to the input video file')
-    parser.add_argument('music_folder', help='Path to the folder with background music files')
-    parser.add_argument('--clip_length', type=int, default=90, help='Length of each clip in seconds')
-    parser.add_argument('--trim_start', default="00:00:00", help='Start time for trimming (HH:MM:SS)')
-    parser.add_argument('--trim_end', default=None, help='End time for trimming (HH:MM:SS)')
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Split and process videos with optional music, thumbnails, and letterbox text overlays.")
+    parser.add_argument('--input', required=True, help='Input video path')
+    parser.add_argument('--music_folder', help='Path to folder with background music')
+    parser.add_argument('--bg_volume', type=float, default=0.05, help='Volume level for background music')
+    parser.add_argument('--output_folder', required=True, help='Path to output folder')
+    parser.add_argument('--clip_length', type=int, default=90, help='Length of each video part in seconds')
+    parser.add_argument('--trim_start', default="00:00:00", help='Start time to trim video (HH:MM:SS)')
+    parser.add_argument('--trim_end', help='End time to trim video (HH:MM:SS)')
+    parser.add_argument('--video_naming_convention', default="clip ..part", help='Naming pattern for output video parts, use ..part')
+    parser.add_argument('--thumbnail_naming_convention', default="thumb ..part", help='Naming pattern for thumbnail files, use ..part')
+    parser.add_argument('--music_file_name', help='Name of combined music file without extension')
+    parser.add_argument('--letterbox_setting', help='Overlay text settings like "-top- text1 -bottom- text2"')
+    parser.add_argument('--thumbnail_font', help='Font settings for thumbnails like "-family- arial.ttf -size- 42 -color- 0xFF000000 -bg_color- 0xFFFFFFFF"')
+    parser.add_argument('--letterbox_top_font', help='Font settings for top letterbox text (same format as thumbnail_font)')
+    parser.add_argument('--letterbox_bottom_font', help='Font settings for bottom letterbox text (same format as thumbnail_font)')
+    parser.add_argument('--video_transpose', type=int, help='Set transpose filter value (0=90°CW+vflip, 1=90°CW, 2=90°CCW, 3=90°CCW+vflip)')
 
     args = parser.parse_args()
-    split_video_fast(
-        args.video_path,
-        args.music_folder,
-        clip_length=args.clip_length,
-        trim_start=args.trim_start,
-        trim_end=args.trim_end
-    )
+    split_video_fast(args)
