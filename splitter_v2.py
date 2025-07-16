@@ -17,6 +17,7 @@ FFMPEG_PATH = r"bin/ffmpeg.exe"
 
 
 def get_music_files_from_directory(music_dir):
+    print(f"Scanning music directory: {music_dir}")
     supported_exts = ('.mp3', '.wav', '.aac', '.m4a')
     return [
         os.path.join(music_dir, f)
@@ -26,6 +27,7 @@ def get_music_files_from_directory(music_dir):
 
 
 def get_audio_duration(file_path):
+    print(f"Getting audio duration for: {file_path}")
     result = subprocess.run([
         FFPROBE_PATH, '-v', 'error',
         '-show_entries', 'format=duration',
@@ -39,6 +41,7 @@ def get_audio_duration(file_path):
 
 
 def combine_and_loop_music(music_paths, total_duration, output_audio_path):
+    print(f"Combining music files: {music_paths} for total duration: {total_duration} seconds")
     if not music_paths:
         return None
 
@@ -67,6 +70,7 @@ def combine_and_loop_music(music_paths, total_duration, output_audio_path):
 
 
 def replace_video_audio(video_path, music_path, output_path, bg_volume):
+    print(f"Replacing audio in {video_path} with {music_path} at volume {bg_volume}")
     cmd = [
         FFMPEG_PATH,
         '-i', video_path,
@@ -83,16 +87,19 @@ def replace_video_audio(video_path, music_path, output_path, bg_volume):
 
 
 def parse_style_arg(style_str):
+    print(f"Parsing style string: {style_str}")
     result = {}
     if not style_str:
         return result
     tokens = re.findall(r'-([a-z_]+)-\s+([^\-]+)', style_str)
     for key, value in tokens:
         result[key] = value.strip()
+    print(f"Parsed style result: {result}")
     return result
 
 
 def create_thumbnail(text, output_path, size, font_settings):
+    print(f"Creating thumbnail with text: '{text}' at {output_path} with size {size} and font settings {font_settings}")
     bg_color = font_settings.get("bg_color", "0x000000").replace("0x", "#")
     text_color = font_settings.get("color", "0xFFFFFF").replace("0x", "#")
     font_size = int(font_settings.get("size", 40))
@@ -116,6 +123,7 @@ def create_thumbnail(text, output_path, size, font_settings):
 
 
 def add_thumbnail_to_video(video_path, thumbnail_path, output_path):
+    print(f"Adding thumbnail {thumbnail_path} to video {video_path} as attached picture")
     cmd = [
         FFMPEG_PATH,
         '-i', video_path,
@@ -131,6 +139,7 @@ def add_thumbnail_to_video(video_path, thumbnail_path, output_path):
 
 
 def build_drawtext_filter(top_text, bottom_text, top_font, bottom_font):
+    print(f"Building drawtext filter for top: '{top_text}' and bottom: '{bottom_text}'")
     filters = []
     duration = 5
 
@@ -150,10 +159,12 @@ def build_drawtext_filter(top_text, bottom_text, top_font, bottom_font):
     if bottom_text:
         filters.append(text_filter(bottom_text, "h-text_h-20", bottom_font))
 
+    print(f"Generated drawtext filters: {filters}")
     return ",".join(filter(None, filters))
 
 
 def get_video_resolution(video_path):
+    print(f"Getting video resolution for: {video_path}")
     cmd = [
         FFPROBE_PATH, '-v', 'error',
         '-select_streams', 'v:0',
@@ -169,6 +180,7 @@ def get_video_resolution(video_path):
 
 
 def split_video_fast(args):
+    print("Starting video split process...")
     input_path = args.input
     if not os.path.exists(input_path):
         print("Video file not found.")
@@ -187,9 +199,12 @@ def split_video_fast(args):
     if trim_duration:
         trim_cmd += ["-t", str(trim_duration)]
     trim_cmd += ["-c", "copy", trimmed_video_path, "-y"]
+    
+    print(f"Trimming video: {trimmed_video_path}")
     subprocess.run(trim_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     input_path = trimmed_video_path
 
+    print(f"Analyzing video duration for: {input_path}")
     result = subprocess.run([
         FFPROBE_PATH, '-v', 'error',
         '-show_entries', 'format=duration',
@@ -247,6 +262,8 @@ def split_video_fast(args):
             '-vf', ",".join(vf_filters),
             '-c:a', 'copy', '-avoid_negative_ts', 'make_zero', video_file, '-y'
         ]
+        
+        print(f"Splitting video: {video_file}")
         subprocess.run(split_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         create_thumbnail(video_name, thumb_path, resolution, thumbnail_font)
